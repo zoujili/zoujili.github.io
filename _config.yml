@@ -1,9 +1,9 @@
 # Site settings
 title: JL Blog
-SEOTitle: 吉利的博客 | BY Blog
+SEOTitle: 吉利的博客 | JL Blog
 header-img: img/post-bg-desk.jpg
 email: z512777682@126.com
-description: "老当益壮 德不匹位"
+description: ""
 keyword: "Jili, Golang, Kubernetes, AI"
 url: "http://zoujili.github.io"          # your host, for absolute URL
 baseurl: ""      # for example, '/blog' if your blog hosted on 'host/blog'
