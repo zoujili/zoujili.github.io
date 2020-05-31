@@ -1,0 +1,1168 @@
+
+
+# 网络编程
+
+## 网络基础
+
+OSI 4层代表传输层  OSI 7层代表应用层
+
+```
+OSI                   TCP
+应用层                 应用层
+表示层 
+会话层
+传输层                 传输层   TCP UDP
+网络层                 网络层   IPV4 IPV6
+数据链路层             网络接口层  网络接口层
+物理层
+```
+
+一个连接可以通过客户端-服务端的IP的端口唯一确定 叫套接字
+
+```
+(clientaddr:clientport,serveraddr:serverport)
+```
+
+IPV4的地址空间 准备划出了一些网段 这些网段不会做公网的IP
+
+比如10.0.x.x 192.168.x.x
+
+子网掩码 将IP地址与子网掩码进行“位于”操作就得到了子网的值
+
+简化 192.0.2.12/30 表示子网掩码有30个1 2个0
+
+```
+255.255.255.0 C类网络
+255.255.0.0 B类网络
+255.0.0.0   A类网络
+```
+
+端口号是个16位的整数 最多为65536 当一个客户端发起连接请求的时候客户端的端口由操作系统内核临时分配
+
+DNS(域名)记录了网址和IP的关系 树状结构
+
+```
+顶级域名
+---edu---com---gov---cn---org---...
+二级域名
+---ibm---hp---cisco---...
+---com---net---org---...
+三级域名
+---tsinghua---pku---...
+四级域名
+---www---cs---ee---...
+```
+
+TCP 字节流套接字（Stream Socket）连接管理，拥塞控制，数据流与窗口管理，超时和重传
+
+UDP 数据报套接字（Datagram Socket）使用 UDP 的原因，第一是速度，第二还是速度
+
+```
+体来说，客户端进程向操作系统内核发起 write 字节流写操作，内核协议栈将字节流通过网络设备传输到服务器端，服务器端从内核得到信息，将字节流从内核读入到进程中，并开始业务逻辑的处理，完成之后，服务器端再将得到的结果以同样的方式写给客户端。可以看到，一旦连接建立，数据的传输就不再是单向的，而是双向的，这也是 TCP 的一个显著特性。
+```
+
+
+
+IPv4套接字地址格式
+
+```
+/* IPV4套接字地址，32bit值.  */
+typedef uint32_t in_addr_t;
+struct in_addr
+  {
+    in_addr_t s_addr;
+  };
+  
+/* 描述IPV4的套接字地址格式  */
+struct sockaddr_in
+  {
+    sa_family_t sin_family; /* 16-bit */
+    in_port_t sin_port;     /* 端口口  16-bit*/
+    struct in_addr sin_addr;    /* Internet address. 32-bit */
+
+    /* 这里仅仅用作占位符，不做实际用处  */
+    unsigned char sin_zero[8];
+  };
+```
+
+16bit sin_family ->AF_INET
+
+16bit端口号  65536
+
+32bitIP地址
+
+## TCP
+
+三次握手
+
+服务端
+
+```
+创建套接字
+int socket(int domain=ipv4, int typp=tcp, int protocal)
+
+把套接字和套接字地址绑定起来
+int bind(int fd, sockaddr *addr, socklen_t len)
+
+初始化创建的套接字，可以认为是一个"主动"套接字，其目的是之后主动发起请求（通过调用 connect 函数，后面会讲到）。通过 listen 函数，可以将原来的"主动"套接字转换为"被动"套接字，告诉操作系统内核：“我这个套接字是用来等待用户请求的。”当然，操作系统内核会为此做好接收用户请求的一切准备，比如完成连接队列
+int listen(int socketfd, int backlog)
+
+int accept(*int listensockfd,strcuct sockaddr * cliaddr socklen_t *addrlen)
+返回值为一个全新的套接字 代表着与客户端的连接
+为啥么要把监听套接字和已连接套接字分开呢 ：为了并发 监听套接字一直存在 一旦一个client和服务器连接成功 完成了三次握手 操作系统内核就为这个客户生成一个已连接套接字 应用服务器使用已连接套接字和客户进行通信处理
+cliadd 是通过指针方式获取的客户端的地址，addrlen 告诉我们地址的大小
+```
+
+客户端
+
+```
+int connect(int sockfd, const struct sockaddr *servaddr, socklen_t addrlen)
+第一个参数 sockfd 是连接套接字，通过前面讲述的 socket 函数创建。第二个、第三个参数 servaddr 和 addrlen 分别代表指向套接字地址结构的指针和该结构的大小。套接字地址结构必须含有服务器的 IP 地址和端口号
+调用 connect 函数将激发 TCP 的三次握手过程（在内核中完成）返回值有三种:
+1.三次握手无法建立，客户端发出的 SYN 包没有任何响应，于是返回 TIMEOUT 错误。这种情况比较常见的原因是对应的服务端 IP 写错。
+2.客户端收到了 RST（复位）回答，这时候客户端会立即返回 CONNECTION REFUSED 错误。这种情况比较常见于客户端发送连接请求时的请求端口写错，因为 RST 是 TCP 在发生错误时发送的一种 TCP 分节。产生 RST 的三个条件是：目的地为某端口的 SYN 到达，然而该端口上没有正在监听的服务器（如前所述）；TCP 想取消一个已有连接；TCP 接收到一个根本不存在的连接上的分节。
+3.客户发出的 SYN 包在网络上引起了"destination unreachable"，即目的不可达的错误。这种情况比较常见的原因是客户端和服务器端路由不通。
+```
+
+三次握手序列
+
+```
+client                         server
+connect(阻塞)                   bind,listen
+SYN_SEND         SYN j         accept(阻塞)
+----------------------------->
+          SYN k ACK j+1        SYN_RCVD
+<-----------------------------
+connect返回
+ESTABLISED
+          ACK k+1
+-----------------------------> accept返回
+                               read阻塞
+                               ESTABLISED
+                       
+为什么要三次握手  其实就是server 和 client 同步自己的序列号
+需要三次握手来约定
+初始序列号 生成一个32位的Seq 每隔4us增长一次  4.55小时循环一次  而一个ISN在网络中的最大分段时间MSL 默认2分钟 所以可以认为
+seq是唯一的
+seq 没有绑定网络的全局时钟
+```
+
+发送和接受数据
+
+````
+ssize_t write (int socketfd, const void *buffer, size_t size)
+发送只是把数据从应用程序中拷贝到操作系统内核的发送缓冲区中，并不一定是把数据通过套接字写出去
+
+ssize_t read (int socketfd, void *buffer, size_t size)
+read 函数要求操作系统内核从套接字描述字 socketfd读取最多多少个字节（size），并将结果存储到 buffer 中。返回值告诉我们实际读取的字节数目，也有一些特殊情况，如果返回值为 0，表示 EOF（end-of-file），这在网络中表示对端发送了 FIN 包，要处理断连的情况
+
+
+/* 从socketfd描述字中读取"size"个字节. */
+size_t readn(int fd, void *buffer, size_t size) {
+    char *buffer_pointer = buffer;
+    int length = size;
+
+    while (length > 0) {
+        int result = read(fd, buffer_pointer, length);
+
+        if (result < 0) {
+            if (errno == EINTR)
+                continue;     /* 考虑非阻塞的情况，这里需要再次调用read */
+            else
+                return (-1);
+        } else if (result == 0)
+            break;                /* EOF(End of File)表示套接字关闭 */
+
+        length -= result;
+        buffer_pointer += result;
+    }
+    return (size - length);        /* 返回的是实际读取的字节数*/
+}
+
+````
+
+```
+QA1:无限增大缓冲区可以么？
+无限增大缓冲区肯定不行，write函数发送数据只是将数据发送到内核缓冲区，而什么时候发送由内核觉定。内核缓冲区总是充满数据时会产生粘包问题，同时网络的传输大小MTU也会限制每次发送的大小，最后由于数据堵塞需要消耗大量内存资源，资源使用效率不高
+```
+
+
+
+工具
+
+```
+ping
+ifconfig
+netstat -alepn
+lsof -i :8080  找到使用8080端口的进程
+tcpdump
+tcpdump -i eth0
+tcpdump src host hostname
+tcpdump 'tcp and port 80 and src host 192.168.1.25'
+tcpdump 'tcp and port 80 and tcp[13:1]&2 != 0'
+  这里 tcp[13:1]表示的是 TCP 头部开始处偏移为 13 的字节，如果这个值为 2，说明设置了 SYN 分节，当然，我们也可以设置成其他值来获取希望类型的分节。注意，这里的偏移是从 0 开始算起的，tcp[13]其实是报文里的第 14 个字节
+  [S]：SYN，表示开始连接
+  [.]：没有标记，一般是确认
+  [P]：PSH，表示数据推送
+  [F]：FIN，表示结束连接
+  [R] ：RST，表示重启连接
+  seq：包序号，就是 TCP 的确认分组
+  cksum：校验码
+  win：滑动窗口大小
+  length：承载的数据（payload）长度 length，如果没有数据则为 0
+
+```
+
+四次挥手
+
+```
+主机一                          主机2
+close(主动关闭)
+FIN_WAIT_1
+               FIN m
+----------------------------> read返回EOF
+                              CLOSE_WAIT
+            ACK m+1                             
+<----------------------------
+FIN_WAIT_2
+            .
+            .
+            .
+                             close
+                             LAST_ACK
+           FIN n         
+<---------------------------
+          ACK n+1
+--------------------------->
+TIME_WAIT                    CLOSED
+                           
+2MSL
+...
+CLOSED
+主机1在TIME_WAIT 停留的时间是固定的 2MSL   Linux为60秒
+
+只有发起连接终止的一方会进入 TIME_WAIT 状态
+为什么需要TIME_WAIT状态
+1.帮助主机2正常关闭 
+  主机1的ACK报文没有传输成功, TCP 重传机制 主机2就会重新发送FIN 如果主机 1 没有维护 TIME_WAIT 状态，而直接进入 CLOSED 状态，它就失去了当前状态的上下文，只能回复一个 RST 操作，从而导致被动关闭方出现错误
+2.帮助主机1旧连接在网络中自然消亡
+ 
+ TCP 就设计出了这么一个机制，经过 2MSL 这个时间，足以让两个方向上的分组都被丢弃，使得原来连接的分组在网络中都自然消失，再出现的分组一定都是新化身所产生的
+
+划重点，2MSL 的时间是从主机 1 接收到 FIN 后发送 ACK 开始计时的；如果在 TIME_WAIT 时间内，因为主机 1 的 ACK 没有传输到主机 2，主机 1 又接收到了主机 2 重发的 FIN 报文，那么 2MSL 时间将重新计时。道理很简单，因为 2MSL 的时间，目的是为了让旧连接的所有报文都能自然消亡，现在主机 1 重新发送了 ACK 报文，自然需要重新计时，以便防止这个 ACK 报文对新可能的连接化身造成干扰
+
+TIME_WAIT 危害
+1. 内存资源占用
+2. 端口资源占用 如果 TIME_WAIT 状态过多，会导致无法创建新连接
+
+
+如何优化 TIME_WAIT
+Linux net.ipv4.tcp_tw_reuse 复用处于 TIME_WAIT 的套接字为新的连接所用
+最大分组 MSL 是 TCP 分组在网络中存活的最长时间，你知道这个最长时间是如何达成的？换句话说，是怎么样的机制，可以保证在 MSL 达到之后，报文就自然消亡了呢
+记录一个值，比如60s，经过一个网关就减去一定短值，值=0的时候网关决定丢弃
+RFC 1323 引入了 TCP 时间戳，那么这需要在发送方和接收方之间定义一个统一的时钟吗
+不需要。timestamp不需要交互，只是发送方使用
+ 
+```
+
+优雅关闭
+
+```
+int close(int sockfd)
+这个函数会对套接字引用计数减一，一旦发现套接字引用计数到 0，就会对套接字进行彻底释放，并且会关闭 TCP 两个方向的数据流
+在输入方向，系统内核会将该套接字设置为不可读，任何读操作都会返回异常。
+在输出方向，系统内核尝试将发送缓冲区的数据发送给对端，并最后向对端发送一个 FIN 报文，接下来如果再对该套接字进行写操作会返回异常
+如果对端没有检测到套接字已关闭，还继续发送报文，就会收到一个 RST 报文，告诉对端：“Hi, 我已经关闭了，别再给我发数据了
+```
+
+```
+int shutdown(int sockfd, int howto)
+SHUT_RD(0)：关闭连接的“读”这个方向，对该套接字进行读操作直接返回 EOF。从数据角度来看，套接字上接收缓冲区已有的数据将被丢弃，如果再有新的数据流到达，会对数据进行 ACK，然后悄悄地丢弃。也就是说，对端还是会接收到 ACK，在这种情况下根本不知道数据已经被丢弃了。
+SHUT_WR(1)：关闭连接的“写”这个方向，这就是常被称为”半关闭“的连接。此时，不管套接字引用计数的值是多少，都会直接关闭连接的写方向。套接字上发送缓冲区已有的数据将被立即发送出去，并发送一个 FIN 报文给对端。应用程序如果对该套接字进行写操作会报错。
+SHUT_RDWR(2)：相当于 SHUT_RD 和 SHUT_WR 操作各一次，关闭套接字的读和写两个方向。
+
+第一个差别：close 会关闭连接，并释放所有连接对应的资源，而 shutdown 并不会释放掉套接字和所有的资源。
+第二个差别：close 存在引用计数的概念，并不一定导致该套接字不可用；shutdown 则不管引用计数，直接使得该套接字不可用，如果有别的进程企图使用该套接字，将会受到影响。
+```
+
+
+
+```
+问题一，为什么调用exit以后不需要调用close，shutdown？
+因为在调用exit之后进程会退出，而进程相关的所有的资源，文件，内存，信号等内核分配的资源都会被释放，在linux中，一切皆文件，本身socket就是一种文件类型，内核会为每一个打开的文件创建file结构并维护指向改结构的引用计数，每一个进程结构中都会维护本进程打开的文件数组，数组下标就是fd，内容就指向上面的file结构，close本身就可以用来操作所有的文件，做的事就是，删除本进程打开的文件数组中指定的fd项，并把指向的file结构中的引用计数减一，等引用计数为0的时候，就会调用内部包含的文件操作close，针对于socket，它内部的实现应该就是调用shutdown，只是参数是关闭读写端，从而比较粗暴的关闭连接。
+```
+
+
+
+TCP keep alive
+
+```
+TCP保活
+第一种，对端程序是正常工作的。当 TCP 保活的探测报文发送给对端, 对端会正常响应，这样 TCP 保活时间会被重置，等待下一个 TCP 保活时间的到来。
+第二种，对端程序崩溃并重启。当 TCP 保活的探测报文发送给对端后，对端是可以响应的，但由于没有该连接的有效信息，会产生一个 RST 报文，这样很快就会发现 TCP 连接已经被重置。
+第三种，是对端程序崩溃，或对端由于其他原因导致报文不可达。当 TCP 保活的探测报文发送给对端后，石沉大海，没有响应，连续几次，达到保活探测次数后，TCP 会报告该 TCP 连接已经死亡
+
+我们可以设计一个 PING-PONG 的机制，需要保活的一方，比如客户端，在保活时间达到后，发起对连接的 PING 操作，如果服务器端对 PING 操作有回应，则重新设置保活时间，否则对探测次数进行计数，如果最终探测次数达到了保活探测次数预先设置的值之后，则认为连接已经无效
+```
+
+流量控制
+
+```
+发送和接受窗口
+发送窗口和接收窗口是 TCP 连接的双方，一个作为生产者，一个作为消费者，为了达到一致协同的生产 - 消费速率、而产生的算法模型实现
+TCP中采用滑动窗口来进行传输控制，滑动窗口的大小意味着接收方知还有多大的缓冲区可以用于接收数据。发送方可以通过滑动窗口的大小来确定应该发送多少道字节的数据。当滑动窗口为0时，发送方一般不能再发送数据报，
+但有两种情况除外，一种情况是可以发送紧急数据，例如，允许用户终止版在远端机上的运行进程。
+另一种情况是发送方可以发送一个1字节的数据报来通知接收方重新声明它希望接收的下一字节及发送方的滑动窗口大权小
+TCP的滑动窗口大小实际上就是socket的接收缓冲区大小的字节数
+
+拥塞控制和数据传输
+TCP 的生产者 - 消费者模型，只是在考虑单个连接的数据传递，但是， TCP 数据包是需要经过网卡、交换机、核心路由器等一系列的网络设备的，网络设备本身的能力也是有限的，当多个连接的数据包同时在网络上传送时，势必会发生带宽争抢、数据丢失等，这样，TCP 就必须考虑多个连接共享在有限的带宽上，兼顾效率和公平性的控制，这就是拥塞控制的本质
+在 TCP 协议中，拥塞控制是通过拥塞窗口来完成的，拥塞窗口的大小会随着网络状况实时调整
+拥塞控制常用的算法有“慢启动”，它通过一定的规则，慢慢地将网络发送数据的速率增加到一个阈值。超过这个阈值之后，慢启动就结束了，另一个叫做“拥塞避免”的算法登场。在这个阶段，TCP 会不断地探测网络状况，并随之不断调整拥塞窗口的大小
+
+在任何一个时刻，TCP 发送缓冲区的数据是否能真正发送出去，至少取决于两个因素，一个是当前的发送窗口大小，另一个是拥塞窗口大小，而 TCP 协议中总是取两者中最小值作为判断依据。比如当前发送的字节为 100，发送窗口的大小是 200，拥塞窗口的大小是 80，那么取 200 和 80 中的最小值，就是 80
+```
+
+```
+糊涂窗口综合征 
+接收端处理得急不可待，比如刚刚读入了 100 个字节，就告诉发送端：“喂，我已经读走 100 个字节了，你继续发”，在这种情况下，你觉得发送端应该怎么做呢
+这个场景需要在接收端进行优化。也就是说，接收端不能在接收缓冲区空出一个很小的部分之后，就急吼吼地向发送端发送窗口更新通知，而是需要在自己的缓冲区大到一个合理的值之后，再向发送端发送窗口更新通知。这个合理的值，由对应的 RFC 规范定义
+
+Nagle算法
+SSH 和远程的服务器交互，这种情况下，我们在屏幕上敲打了一个命令，等待服务器返回结果，这个过程需要不断和服务器端进行数据传输。这里最大的问题是，每次传输的数据可能都非常小，比如敲打的命令“pwd”，仅仅三个字符。这意味着什么？这就好比，每次叫了一辆大货车，只送了一个小水壶。在这种情况下，你又觉得发送端该怎么做才合理呢
+在发送端进行优化。这个优化的算法叫做 Nagle 算法，Nagle 算法的本质其实就是限制大批量的小数据包同时发送，为此，它提出，在任何一个时刻，未被确认的小数据包不能超过一个。这里的小数据包，指的是长度小于最大报文段长度 MSS 的 TCP 分组。这样，发送端就可以把接下来连续的几个小数据包存储起来，等待接收到前一个小数据包的 ACK 分组之后，再将数据一次性发送出去
+
+延时 ACK
+接收端需要对每个接收到的 TCP 分组进行确认，也就是发送 ACK 报文，但是 ACK 报文本身是不带数据的分段，如果一直这样发送大量的 ACK 报文，就会消耗大量的带宽。之所以会这样，是因为 TCP 报文、IP 报文固有的消息头是不可或缺的，比如两端的地址、端口号、时间戳、序列号等信息， 在这种情形下，你觉得合理的做法是什么
+需要在接收端进行优化，这个优化的算法叫做延时 ACK。延时 ACK 在收到数据后并不马上回复，而是累计需要发送的 ACK 报文，等到有数据需要发送给对端时，将累计的 ACK捎带一并发送出去。当然，延时 ACK 机制，不能无限地延时下去，否则发送端误认为数据包没有发送成功，引起重传，反而会占用额外的网络带宽
+```
+
+```
+我们在发送数据的时候，不应该假设“数据流和 TCP 分组是一种映射关系
+```
+
+故障
+
+```
+网络中断造成的对端无 FIN 包
+很多原因都会造成网络中断，在这种情况下，TCP 程序并不能及时感知到异常信息。除非网络中的其他设备，如路由器发出一条 ICMP 报文，说明目的网络或主机不可达，这个时候通过 read 或 write 调用就会返回 Unreachable 的错误。可惜大多数时候并不是如此，在没有 ICMP 报文的情况下，TCP 程序并不能理解感应到连接异常。如果程序是阻塞在 read 调用上，那么很不幸，程序无法从异常中恢复。这显然是非常不合理的，不过，我们可以通过给 read 操作设置超时来解决，在接下来的第 18 讲中，我会讲到具体的方法。如果程序先调用了 write 操作发送了一段数据流，接下来阻塞在 read 调用上，结果会非常不同。Linux 系统的 TCP 协议栈会不断尝试将发送缓冲区的数据发送出去，大概在重传 12 次、合计时间约为 9 分钟之后，协议栈会标识该连接异常，这时，阻塞的 read 调用会返回一条 TIMEOUT 的错误信息。如果此时程序还执着地往这条连接写数据，写操作会立即失败，返回一个 SIGPIPE 信号给应用程序
+
+系统崩溃造成的对端无 FIN 包
+当系统突然崩溃，如断电时，网络连接上来不及发出任何东西。这里和通过系统调用杀死应用程序非常不同的是，没有任何 FIN 包被发送出来。这种情况和网络中断造成的结果非常类似，在没有 ICMP 报文的情况下，TCP 程序只能通过 read 和 write 调用得到网络连接异常的信息，超时错误是一个常见的结果。不过还有一种情况需要考虑，那就是系统在崩溃之后又重启，当重传的 TCP 分组到达重启后的系统，由于系统中没有该 TCP 分组对应的连接数据，系统会返回一个 RST 重置分节，TCP 程序通过 read 或 write 调用可以分别对 RST 进行错误处理。如果是阻塞的 read 调用，会立即返回一个错误，错误信息为连接重置（Connection Reset）。如果是一次 write 操作，也会立即失败，应用程序会被返回一个 SIGPIPE 信号。
+
+对端有FIN
+对端如果有 FIN 包发出，可能的场景是对端调用了 close 或 shutdown 显式地关闭了连接，也可能是对端应用程序崩溃，操作系统内核代为清理所发出的。从应用程序角度上看，无法区分是哪种情形。阻塞的 read 操作在完成正常接收的数据读取之后，FIN 包会通过返回一个 EOF 来完成通知，此时，read 调用返回值为 0。这里强调一点，收到 FIN 包之后 read 操作不会立即返回。你可以这样理解，收到 FIN 包相当于往接收缓冲区里放置了一个 EOF 符号，之前已经在接收缓冲区的有效数据不会受到影响。
+```
+
+
+
+## 阻塞和非阻塞
+
+```
+非阻塞 拷贝-返回-拷贝-返回
+阻塞   拷贝- 直到所有数据拷贝到发送缓冲区-返回
+实战中，你可以不用区别阻塞和非阻塞 I/O，使用循环的方式来写入数据就好了。只不过在阻塞 I/O 的情况下，循环只执行一次就结束了
+
+/* 向文件描述符fd写入n字节数 */
+ssize_t writen(int fd, const void * data, size_t n)
+{
+    size_t      nleft;
+    ssize_t     nwritten;
+    const char  *ptr;
+
+    ptr = data;
+    nleft = n;
+    //如果还有数据没被拷贝完成，就一直循环
+    while (nleft > 0) {
+        if ( (nwritten = write(fd, ptr, nleft)) <= 0) {
+           /* 这里EAGAIN是非阻塞non-blocking情况下，通知我们再次调用write() */
+            if (nwritten < 0 && errno == EAGAIN)
+                nwritten = 0;      
+            else
+                return -1;         /* 出错退出 */
+        }
+
+        /* 指针增大，剩下字节数变小*/
+        nleft -= nwritten;
+        ptr   += nwritten;
+    }
+    return n;
+}
+
+
+阻塞
+read  接受缓冲区只要有数据就立即返回 只有当接受缓冲区为空时才阻塞等待
+write 只有发送缓冲区可以放下整个buffer才返回 否则阻塞
+
+非阻塞
+read 无论有无数据 都立即返回  当receieve buffer 为空时会返回-1（errno=EAGAIN OR EWOULDBLOCK)
+write 无论发送缓冲区是否能放下整个buffer 都立即返回 返回能放下的字节数 之后调用返回-1errno=EAGAIN OR EWOULDBLOCK)
+
+对于blocking的write有个特例：当write正阻塞等待时对面关闭了socket，则write则会立即将剩余缓冲区填满并返回所写的字节数，再次调用则write失败（connection reset by peer）
+
+对于accept()也要设置为非阻塞
+
+```
+
+总结
+
+```
+当应用程序调用阻塞IO的时候 会被挂起 等待内核完成操作 实际上内核所做的事情是将CPU的时间切换给其他有需要的进程
+非阻塞IO不然 当应用程序调用非阻塞IO的时候 内核立即返回 不会把CPU时间交给其他进程 应用程序在返回后 可以得到足够的时间完成其他事情
+
+
+阻塞方式的意思是指，当试图对该文件描述符进行读写时，如果当时没有东西可读，或者暂时不可写，程序就进入等待状态，直到有东西可读或者可写为止。
+
+而对于非阻塞状态，如果没有东西可读，或者不可写，读写函数马上返回，而不会等待。
+
+非阻塞，就是进程或线程执行此函数时不必非要等待事件的发生，一旦执行肯定返回，以返回值的不同来反映函数的执行情况，如果事件发生则与阻塞方式相同，若事件没有发生则返回一个代码来告知事件未发生，而进程或线程继续执行，所以效率较高
+
+一个套接字阻塞或者不阻塞，select就在那里，它可以针对这2种套接字使用
+
+非阻塞 I/O 可以使用在 read、write、accept、connect 等多种不同的场景，在非阻塞 I/O 下，使用轮询的方式引起 CPU 占用率高，所以一般将非阻塞 I/O 和 I/O 多路复用技术 select、poll 等搭配使用，在非阻塞 I/O 事件发生时，再调用对应事件的处理函数。这种方式，极大地提高了程序的健壮性和稳定性，是 Linux 下高性能网络编程的首选
+
+阻塞IO 在等待IO的时候 CPU不会把时间片给用户线程
+对于多线程程序，cpu会被分配给其他线程
+调用非阻塞I/O跟阻塞I/O的差别为调用之后立即返回，返回后，CPU的时间片可以用来处理其他事务，此时性能是提升的。但是非阻塞I/O的问题是：由于完整的I/O没有完成，立即返回的并不是业务层期望的数据，而仅仅是当前调用的状态。为了获取完整的数据，应用程序需要重复调用I/O操作来确认是否完成。这种重复调用判断操作是否完成的技术叫做轮询
+epoll是在阻塞 等待事件的到来 当来了一个事件 这个事件的socket的FD可以设置为非阻塞或者阻塞
+假设正在对某个socket调用阻塞的write，当数据没有完全发送完成前，write将无法返回，从而阻止了整个epoll进入下一个循环，如果这个时候其他的socket有读就绪的话，将无法第一时间响应。所以非阻塞的读写将在某个fd读写较慢的时候，立刻返回，而不会一直等到读写结束。这样才能提高吞吐。然而，采用非阻读写将大大提高编程难度
+在多线程的情况下 非阻塞IO减少了线程的切换 因为阻塞IO当前线程被阻塞会进入休眠也就是会进行线程切换  所以非阻塞IO的可以提高CPU的效率 减少瞬间的线程并发数
+```
+
+EAGAIN错误
+
+```
+应用程序没有数据可读 请稍后
+```
+
+## IO多路复用
+
+select
+
+```
+int select(int maxfd, fd_set *readset, fd_set *writeset, fd_set *exceptset, const struct timeval *timeout);
+
+返回：若有就绪描述符则为其数目，若超时则为0，若出错则为-1
+
+maxfd 表示的是待测试的描述符基数，它的值是待测试的最大描述符加 1。比如现在的 select 待测试的描述符集合是{0,1,4}，那么 maxfd 就是 5，为啥是 5，而不是 4 呢
+
+紧接着的是三个描述符集合，分别是读描述符集合 readset、写描述符集合 writeset 和异常描述符集合 exceptset，这三个分别通知内核，在哪些描述符上检测数据可以读，可以写和有异常发生
+
+套接字描述符就绪条件
+第一种情况是套接字接收缓冲区有数据可以读，如果我们使用 read 函数去执行读操作，肯定不会被阻塞，而是会直接读到这部分数据。
+第二种情况是对方发送了 FIN，使用 read 函数执行读操作，不会被阻塞，直接返回 0。
+第三种情况是针对一个监听套接字而言的，有已经完成的连接建立，此时使用 accept 函数去执行不会阻塞，直接返回已经完成的连接。
+第四种情况是套接字有错误待处理，使用 read 函数去执行读操作，不阻塞，且返回 -1。
+总结成一句话就是，内核通知我们套接字有数据可以读了，使用 read 函数不会阻塞
+
+描述符基数是当前最大描述符 +1；
+每次 select 调用完成之后，记得要重置待测试集
+```
+
+c10K问题
+
+```
+文件句柄
+在 Linux 下，单个进程打开的文件句柄数是有限制的，没有经过修改的值一般都是 1024 不过，可以对这个值进行修改，比如用 root 权限修改 /etc/sysctl.conf 文件，使得系统可以支持 10000 个描述符上限
+
+系统内存
+需要接受和发送缓冲区
+$cat /proc/sys/net/ipv4/tcp_wmem4096 
+16384 4194304
+$ cat /proc/sys/net/ipv4/tcp_rmem4096 87380 6291456
+一万个连接需要的内存消耗为：
+发送缓冲区： 16384*10000 = 160M bytes
+接收缓冲区： 87380*10000 = 880M bytes
+
+网络带宽
+```
+
+```
+非阻塞就是应用程序可以一直去调用read write 它们会直接返回 如果用了IO分发技术 就可以在一直调用的循环里面去select或epoll wait 当有事件来了再处理 
+异步是调用后自己完全不用管了 由操作系统处理 最后会产生一个信号 或执行一个回调
+```
+
+阻塞IO + 进程模型 最传统
+
+```
+apache服务器
+```
+
+阻塞IO + 线程
+
+```
+在Linux里面 线程就是轻量级线程 都使用task_struct结构
+线程又称轻量级进程，他们的本质都是一段代码指令，被放到内存中等待执行，不过区别在于，进程间完全是隔离的互不影响，但是一个进程内的线程间是共享内存空间的，当然线程也有自己私有的一下资源，比如栈空间和PC寄存器等’
+程（thread）是运行在进程中的一个“逻辑流”，现代操作系统都允许在单进程中运行多个线程。线程由操作系统内核管理。每个线程都有自己的上下文（context），包括一个可以唯一标识线程的 ID（thread ID，或者叫 tid）、栈、程序计数器、寄存器等。在同一个进程中，所有的线程共享该进程的整个虚拟地址空间，包括代码、数据、堆、共享库等
+
+1 忽略SIGCHLD， 2 调用wait或waitpid
+
+```
+
+epoll
+
+```
+1.int epoll_create()
+返回值: 若成功返回一个大于0的值，表示epoll实例；若返回-1表示出错
+
+2.int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event); 返回值: 若成功返回0；若返回-1表示出错
+通过调用 epoll_ctl 往这个 epoll 实例增加或删除监控的事件
+第一个参数 epfd 是刚刚调用 epoll_create 创建的 epoll 实例描述字，可以简单理解成是 epoll 句柄。
+第二个参数表示增加还是删除一个监控事件，它有三个选项可供选择：
+EPOLL_CTL_ADD： 向 epoll 实例注册文件描述符对应的事件；
+EPOLL_CTL_DEL：向 epoll 实例删除文件描述符对应的事件；EPOLL_CTL_MOD： 修改文件描述符对应的事件。
+第三个参数是注册的事件的文件描述符，比如一个监听套接字。
+第四个参数表示的是注册的事件类型，并且可以在这个结构体里设置用户需要的数据，其中最为常见的是使用联合结构里的 fd 字段，表示事件所对应的文件描述符
+
+typedef union epoll_data {
+     void        *ptr;
+     int          fd;
+     uint32_t     u32;
+     uint64_t     u64;
+ } epoll_data_t;
+
+ struct epoll_event {
+     uint32_t     events;      /* Epoll events */
+     epoll_data_t data;        /* User data variable */
+ };
+ 
+
+3.int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
+  返回值: 成功返回的是一个大于0的数，表示事件的个数；返回0表示的是超时时间到；若出错返回-1.
+  
+  epoll_wait() 函数类似之前的 poll 和 select 函数，调用者进程被挂起，在等待内核 I/O 事件的分发。
+  这个函数的第一个参数是 epoll 实例描述字，也就是 epoll 句柄。
+  第二个参数返回给用户空间需要处理的 I/O 事件，这是一个数组，数组的大小由 epoll_wait 的返回值决定，这个数组的每个元素都是一个需要待处理的 I/O 事件，其中 events 表示具体的事件类型，事件类型取值和 epoll_ctl 可设置的值一样，这个 epoll_event 结构体里的 data 值就是在 epoll_ctl 那里设置的 data，也就是用户空间和内核空间调用时需要的数据。
+  第三个参数是一个大于 0 的整数，表示 epoll_wait 可以返回的最大事件值。
+  第四个参数是 epoll_wait 阻塞调用的超时值，如果这个值设置为 -1，表示不超时；如果设置为 0 则立即返回，即使没有任何 I/O 事件发生。
+ 
+ 当epoll_wait返回时，对返回的事件一一进行判断处理，如果是监听事件就绪，表明有连接请求需要处理，并将新的套接字添加进epoll实例中；如果是其他socket就绪，表明数据就绪可以进行读取和写入了
+```
+
+epoll事件
+
+```
+EPOLLIN：表示对应的文件描述字可以读；
+EPOLLOUT：表示对应的文件描述字可以写；
+EPOLLRDHUP：表示套接字的一端已经关闭，或者半关闭；EPOLLHUP：表示对应的文件描述字被挂起；
+EPOLLET：设置为 edge-triggered，默认为 level-triggered。
+```
+
+
+
+## 深入解析
+
+epoll源码
+
+eventpoll 是调用了epoll_create之后内核侧创建的一个句柄 表示了一个epoll实例 后续再调用ctl和wait都是对这个eventpoll数据进行操作 这个数据会被保存在epoll_create创建的匿名文件file的private字段中
+
+```
+/*
+ * This structure is stored inside the "private_data" member of the file
+ * structure and represents the main data structure for the eventpoll
+ * interface.
+ */
+struct eventpoll {
+    /* Protect the access to this structure */
+    spinlock_t lock;
+
+    /*
+     * This mutex is used to ensure that files are not removed
+     * while epoll is using them. This is held during the event
+     * collection loop, the file cleanup path, the epoll file exit
+     * code and the ctl operations.
+     */
+    struct mutex mtx;
+
+    /* Wait queue used by sys_epoll_wait() */
+    //这个队列里存放的是执行epoll_wait从而等待的进程队列
+    wait_queue_head_t wq;
+
+    /* Wait queue used by file->poll() */
+    //这个队列里存放的是该eventloop作为poll对象的一个实例，加入到等待的队列
+    //这是因为eventpoll本身也是一个file, 所以也会有poll操作
+    wait_queue_head_t poll_wait;
+
+    /* List of ready file descriptors */
+    //这里存放的是事件就绪的fd列表，链表的每个元素是下面的epitem
+    struct list_head rdllist;
+
+    /* RB tree root used to store monitored fd structs */
+    //这是用来快速查找fd的红黑树
+    struct rb_root_cached rbr;
+
+};
+```
+
+每当我们调用epoll_ctl增加一个fd 内核就会为我们创建出一个epitem实例 并把这个实例作为红黑树的一个子节点  查找每一个fd上是否有事件发生都是通过红黑树上的epitem来操作
+
+```
+//对应到一个加入epoll的文件
+struct epitem {
+    union {
+        /* RB tree node links this structure to the eventpoll RB tree */
+        struct rb_node rbn;
+        /* Used to free the struct epitem */
+        struct rcu_head rcu;
+    };
+
+    /* List header used to link this structure to the eventpoll ready list */
+    //将这个epitem连接到eventpoll 里面的rdllist的list指针
+    struct list_head rdllink;
+
+    /*
+     * Works together "struct eventpoll"->ovflist in keeping the
+     * single linked chain of items.
+     */
+    struct epitem *next;
+
+    /* The file descriptor information this item refers to */
+    //epoll监听的fd 红黑树的key
+    struct epoll_filefd ffd;
+
+    /* Number of active wait queue attached to poll operations */
+    //一个文件可以被多个epoll实例所监听，这里就记录了当前文件被监听的次数
+    int nwait;
+
+    /* List containing poll wait queues */
+    struct list_head pwqlist;
+
+    /* The "container" of this item */
+    //当前epollitem所属的eventpoll
+    struct eventpoll *ep;
+
+    /* List header used to link this item to the "struct file" items list */
+    struct list_head fllink;
+
+    /* wakeup_source used when EPOLLWAKEUP is set */
+    struct wakeup_source __rcu *ws;
+
+    /* The structure that describe the interested events and the source fd */
+    struct epoll_event event;
+};
+```
+
+每当一个fd关联到一个epoll实例 就会有一个epoll_entry产生
+
+```
+// 与一个文件上的一个wait_queue_head 相关联，因为同一文件可能有多个等待的事件，这些事件可能使用不同的等待队列  
+struct eppoll_entry {
+    /* List header used to link this structure to the "struct epitem" */
+    struct list_head llink;
+
+    /* The "base" pointer is set to the container "struct epitem" */所有者
+    struct epitem *base;
+
+    /*
+     * Wait queue item that will be linked to the target file wait
+     * queue head.
+     */
+    wait_queue_entry_t wait;
+
+    /* The wait queue head that linked the "wait" wait queue item */
+    wait_queue_head_t *whead;
+};
+```
+
+
+
+
+
+
+
+## 引用文章
+
+# 如果这篇文章说不清epoll的本质，那就过来掐死我吧
+
+1.网卡会把接收到的数据写入内存
+
+2.如何知道接受了数据
+计算机执行程序时，会有优先级的需求。比如，当计算机收到断电信号时（电容可以保存少许电量，供CPU运行很短的一小段时间），它应立即去保存数据，保存数据的程序具有较高的优先级
+一般而言，由硬件产生的信号需要cpu立马做出回应（不然数据可能就丢失），所以它的优先级很高。cpu理应中断掉正在执行的程序，去做出响应；当cpu完成对硬件的响应后，再重新执行用户程序
+当网卡把数据写入到内存后，网卡向cpu发出一个中断信号，操作系统便能得知有新数据到来，再通过网卡中断程序去处理数据
+
+3.进程阻塞为什么不占用CPU资源
+作系统为了支持多任务，实现了进程调度的功能，会把进程分为“运行”和“等待”等几种状态。运行状态是进程获得cpu使用权，正在执行代码的状态；等待状态是阻塞状态，比如socket程序运行到recv时，程序会从运行状态变为等待状态，接收到数据后又变回运行状态
+    操作系统工作队列
+    进程A-进程B-进程C
+    当进程A执行到创建socket的语句时，操作系统会创建一个由文件系统管理的socket对象这个socket对象包含了发送缓冲区、接收缓冲区、等待队列等成员。等待队列是个非常重要的结构，它指向所有需要等待该socket事件的进程
+    当程序执行到recv时，操作系统会将进程A从工作队列移动到该socket的等待队列。由于工作队列只剩下了进程B和C，依据进程调度，cpu会轮流执行这两个进程的程序，不会执行进程A的程序。所以进程A被阻塞，不会往下执行代码，也不会占用cpu资源
+    ps：操作系统添加等待队列只是添加了对这个“等待中”进程的引用，以便在接收到数据时获取进程对象、将其唤醒，而非直接将进程管理纳入自己之下
+    当socket接收到数据后，操作系统将该socket等待队列上的进程重新放回到工作队列，该进程变成运行状态，继续执行代码。也由于socket的接收缓冲区已经有了数据，recv可以返回接收到的数据
+
+4.内核接受网络数据的全过程
+
+![](draveness_3.jpeg)
+
+进程在recv阻塞期间，计算机收到了对端传送的数据（步骤①）。数据经由网卡传送到内存（步骤②），然后网卡通过中断信号通知cpu有数据到达，cpu执行中断程序（步骤③）。此处的中断程序主要有两项功能，先将网络数据写入到对应socket的接收缓冲区里面（步骤④），再唤醒进程A（步骤⑤），重新将进程A放入工作队列中
+
+5.同时监视多个socket的简单方法
+
+- select
+
+```
+select
+  int fds[]=存放需要监听的socket
+  whlie(1){
+     int n = select(...,fds,...)
+  }
+```
+
+fds存放着所有需要监视的socket。然后调用select，如果fds中的所有socket都没有数据，select会阻塞，直到有一个socket接收到数据，select返回，唤醒进程。用户可以遍历fds，通过FD_ISSET判断具体哪个socket收到数据，然后做出处理
+
+程序同时监听sock1 sock2 sock3 在调用select后 操作系统把A进程分别加入这三个socket的等待队列中 当任何一个socket收到数据后，中断程序将唤起进程
+
+所谓唤起进程，就是将进程从所有的等待队列(socket1,2,3)中移除，加入到工作队列里面
+
+缺点
+
+```
+ 每次select都需要将进程加入到监视socket的监听队列 每次唤醒都需要从每个队列中移除 这里涉及了两次遍历  而且每次都要将整个fds列表传递给内核 有一定开销 出于效率的考虑 才会规定selelct最大监视的数量为1024
+  进程被唤醒后 程序并不知道哪个socket接受到数据 还需要遍历一次
+  当程序调用select时，内核会先遍历一遍socket，如果有一个以上的socket接收缓冲区有数据，那么select直接返回，不会阻塞。这也是为什么select的返回值有可能大于1的原因之一。如果没有socket有数据，进程才会阻塞
+```
+
+- epoll
+
+大多数应用场景中，需要监视的socket相对固定，并不需要每次都修改。epoll将这两个操作分开，先用epoll_ctl维护等待队列，再调用epoll_wait阻塞进程
+
+```
+  int epfd = epoll_create(...)
+  epoll_ctl(epfd,...) 将所有需要监听的socket添加到epfd中
+  whlie（1）{
+      int n = epoll_wait(...)
+      for (接受到数据的socket){
+      
+      }
+  }
+```
+
+1.创建epoll对象
+
+![](draveness_4.jpeg)
+
+创建epoll对象后，可以用epoll_ctl添加或删除所要监听的socket。以添加socket为例，如果通过epoll_ctl添加sock1、sock2和sock3的监视，内核会将eventpoll添加到这三个socket的等待队列中
+
+当socket收到数据后，中断程序会操作eventpoll对象，而不是直接操作进程
+
+2.接受数据
+
+sock2和sock3收到数据后，中断程序让rdlist引用这两个socket
+
+![](draveness_5.jpeg)
+
+eventpoll对象相当于是socket和进程之间的中介，socket的数据接收并不直接影响进程，而是通过改变eventpoll的就绪列表来改变进程状态
+
+当程序执行到epoll_wait时，如果rdlist已经引用了socket，那么epoll_wait直接返回，如果rdlist为空，阻塞进程
+
+3.阻塞和唤醒进程
+
+假设计算机中正在运行进程A和进程B，在某时刻进程A运行到了epoll_wait语句。如下图所示，内核会将进程A放入eventpoll的等待队列中，阻塞进程
+
+![](draveness_6.jpeg)
+
+当socket接收到数据，中断程序一方面修改rdlist，另一方面唤醒eventpoll等待队列中的进程，进程A再次进入运行状态（如下图）。也因为rdlist的存在，进程A可以知道哪些socket发生了变化
+
+![](draveness_7.jpeg)
+
+
+
+4. epoll数据结构
+
+![](draveness_8.jpeg)
+
+- 就绪列表的数据结构
+
+就绪列表引用着就绪的socket，所以它应能够快速的插入数据。
+
+程序可能随时调用epoll_ctl添加监视socket，也可能随时删除。当删除时，若该socket已经存放在就绪列表中，它也应该被移除。
+
+所以就绪列表应是一种能够快速插入和删除的数据结构。双向链表就是这样一种数据结构，epoll使用双向链表来实现就绪队列（对应上图的rdllist
+
+- 索引结构
+
+既然epoll将“维护监视队列”和“进程阻塞”分离，也意味着需要有个数据结构来保存监视的socket。至少要方便的添加和移除，还要便于搜索，以避免重复添加。红黑树是一种自平衡二叉查找树，搜索、插入和删除时间复杂度都是O(log(N))，效率较好。epoll使用了红黑树作为索引结构（对应上图的rbr）。
+
+
+
+![](draveness_9.jpeg)
+
+5.LT ET
+
+epoll独有的两种模式LT和ET。无论是LT和ET模式，都适用于以上所说的流程。
+
+区别是，LT模式下，只要一个句柄上的事件一次没有处理完，会在以后调用epoll_wait时次次返回这个句柄，而ET模式仅在第一次返回。
+
+这件事怎么做到的呢？当一个socket句柄上有事件时，内核会把该句柄插入上面所说的准备就绪list链表，这时我们调用epoll_wait，会把准备就绪的socket拷贝到用户态内存，然后清空准备就绪list链表，最后，epoll_wait干了件事，就是检查这些socket，如果不是ET模式（就是LT模式的句柄了），并且这些socket上确实有未处理的事件时，又把该句柄放回到刚刚清空的准备就绪链表了。
+
+所以，非ET的句柄，只要它上面还有事件，epoll_wait每次都会返回。而ET模式的句柄，除非有新中断到，即使socket上的事件没有处理完，也是不会次次从epoll_wait返回的
+
+比如2个TCP包一起到达 接受缓存区有2个IN时间 如果只拷贝了一个 LT在处理完epoll_wait后还会去检查socket是否还有没有处理的事件
+
+在使用水平触发的时候，应该很谨慎的关注文件描述符的读写事件，如果关注了不去处理，导致epoll每次都返回，会造成busy loop。而对于边缘触发的方式来说，当内核通过读写就绪之后，对于读来说，必须一直读到不能读，对于写来说必须写到不能再写，如果没有读全或者写全
+ET模式下如果不把剩下的数据都读完 socket将永不可读 除非来的新的客户数据
+ET模式下如果不把剩下的数据写满 socket将永不可写
+
+## 其他
+
+```
+tcp接受缓冲区默认值
+cat /proc/sys/net/ipv4/tcp_rmem
+4096 131072 6291456
+tcp发送缓冲区默认值
+cat /proc/sys/net/ipv4/tcp_wmem
+4096 16384 4194304
+MSS 1460
+```
+
+tcp dump数据
+
+```
+sudo tcpdump -i lo  port 12345
+
+18:42:45.580689 IP localhost.58492 > localhost.12345: Flags [S], seq 717949588, win 65495, options [mss 65495,sackOK,TS val 4240275616 ecr 0,nop,wscale 7], length 0
+18:42:45.580697 IP localhost.12345 > localhost.58492: Flags [S.], seq 2597512881, ack 717949589, win 65483, options [mss 65495,sackOK,TS val 4240275616 ecr 4240275616,nop,wscale 7], length 0
+18:42:45.580703 IP localhost.58492 > localhost.12345: Flags [.], ack 1, win 512, options [nop,nop,TS val 4240275616 ecr 4240275616], length 0
+18:42:47.643220 IP localhost.58492 > localhost.12345: Flags [.], seq 1:32742, ack 1, win 512, options [nop,nop,TS val 4240277679 ecr 4240275616], length 32741
+18:42:47.643254 IP localhost.12345 > localhost.58492: Flags [.], ack 32742, win 381, options [nop,nop,TS val 4240277679 ecr 4240277679], length 0
+18:42:47.643294 IP localhost.58492 > localhost.12345: Flags [P.], seq 32742:65483, ack 1, win 512, options [nop,nop,TS val 4240277679 ecr 4240277679], length 32741
+18:42:47.686333 IP localhost.12345 > localhost.58492: Flags [.], ack 65483, win 126, options [nop,nop,TS val 4240277722 ecr 4240277679], length 0
+18:42:47.898407 IP localhost.58492 > localhost.12345: Flags [P.], seq 65483:81611, ack 1, win 512, options [nop,nop,TS val 4240277934 ecr 4240277722], length 16128
+18:42:47.898490 IP localhost.12345 > localhost.58492: Flags [.], ack 81611, win 0, options [nop,nop,TS val 4240277934 ecr 4240277934], length 0
+18:42:48.110395 IP localhost.58492 > localhost.12345: Flags [.], ack 1, win 512, options [nop,nop,TS val 4240278146 ecr 4240277934], length 0
+18:42:48.110463 IP localhost.12345 > localhost.58492: Flags [.], ack 81611, win 0, options [nop,nop,TS val 4240278146 ecr 4240277934], length 0
+18:42:48.530362 IP localhost.58492 > localhost.12345: Flags [.], ack 1, win 512, options [nop,nop,TS val 4240278566 ecr 4240278146], length 0
+18:42:49.394391 IP localhost.58492 > localhost.12345: Flags [.], ack 1, win 512, options [nop,nop,TS val 4240279430 ecr 4240278146], length 0
+18:42:49.394458 IP localhost.12345 > localhost.58492: Flags [.], ack 81611, win 0, options [nop,nop,TS val 4240279430 ecr 4240277934], length 0
+18:42:51.090392 IP localhost.58492 > localhost.12345: Flags [.], ack 1, win 512, options [nop,nop,TS val 4240281126 ecr 4240279430], length 0
+18:42:51.090456 IP localhost.12345 > localhost.58492: Flags [.], ack 81611, win 0, options [nop,nop,TS val 4240281126 ecr 4240277934], length 0
+18:42:54.674362 IP localhost.58492 > localhost.12345: Flags [.], ack 1, win 512, options [nop,nop,TS val 4240284710 ecr 4240281126], length 0
+18:42:54.674392 IP localhost.12345 > localhost.58492: Flags [.], ack 81611, win 0, options [nop,nop,TS val 4240284710 ecr 4240277934], length 0
+18:43:01.586408 IP localhost.58492 > localhost.12345: Flags [.], ack 1, win 512, options [nop,nop,TS val 4240291622 ecr 4240284710], length 0
+18:43:01.586477 IP localhost.12345 > localhost.58492: Flags [.], ack 81611, win 0, options [nop,nop,TS val 4240291622 ecr 4240277934], length 0
+18:43:15.154390 IP localhost.58492 > localhost.12345: Flags [.], ack 1, win 512, options [nop,nop,TS val 4240305190 ecr 4240291622], length 0
+18:43:15.154456 IP localhost.12345 > localhost.58492: Flags [.], ack 81611, win 0, options [nop,nop,TS val 4240305190 ecr 4240277934], length 0
+18:43:18.647739 IP localhost.12345 > localhost.58492: Flags [.], ack 81611, win 318, options [nop,nop,TS val 4240308683 ecr 4240277934], length 0
+18:43:18.647762 IP localhost.58492 > localhost.12345: Flags [P.], seq 81611:98224, ack 1, win 512, options [nop,nop,TS val 4240308683 ecr 4240308683], length 16613
+18:43:18.647782 IP localhost.12345 > localhost.58492: Flags [.], ack 98224, win 189, options [nop,nop,TS val 4240308683 ecr 4240308683], length 0
+18:43:18.647793 IP localhost.58492 > localhost.12345: Flags [P.], seq 98224:100001, ack 1, win 512, options [nop,nop,TS val 4240308683 ecr 4240308683], length 1777
+18:43:18.690355 IP localhost.12345 > localhost.58492: Flags [.], ack 100001, win 176, options [nop,nop,TS val 4240308726 ecr 4240308683], length 0
+18:44:24.657096 IP localhost.12345 > localhost.58492: Flags [.], ack 100001, win 512, options [nop,nop,TS val 4240374693 ecr 4240308683], length 0
+19:20:05.021464 IP localhost.58492 > localhost.12345: Flags [F.], seq 100001, ack 1, win 512, options [nop,nop,TS val 4242515064 ecr 4240374693], length 0
+19:20:05.062392 IP localhost.12345 > localhost.58492: Flags [.], ack 100002, win 512, options [nop,nop,TS val 4242515105 ecr 4242515064], length 0
+19:20:06.021717 IP localhost.12345 > localhost.58492: Flags [F.], seq 1, ack 100002, win 512, options [nop,nop,TS val 4242516064 ecr 4242515064], length 0
+19:20:06.021742 IP localhost.58492 > localhost.12345: Flags [.], ack 2, win 512, options [nop,nop,TS val 4242516065 ecr 4242516064], length 0
+
+
+在握手和结束时确认号应该是对方序列号加1,传输数据时则是对方序列号加上对方携带应用层数据的长度
+syn ack 是双向的  其实很好理解
+```
+
+C++ 11 epoll handy
+
+```
+g++ -V
+g++ std=c++11 -o epoll epoll.cc
+./epoll
+
+netstat -anp |grep 80
+```
+
+```
+/*
+ * 编译：c++ -o epoll epoll.cc
+ * 运行： ./epoll
+ * 测试：curl -v localhost
+ */
+
+
+/* 
+    运行效果
+    使用sudo 运行epoll程序。该程序在本机0.0.0.0的80端口监听，作为一个http服务器运行
+    每当有连接访问时，返回静态资源httpRes
+    LT是默认模式
+
+ */
+
+#include <sys/socket.h>
+#include <sys/epoll.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+#include <stdlib.h>
+#include <map>
+#include <string>
+#include <signal.h>
+#include <iostream>
+using namespace std;
+
+
+bool output_log = true;
+// 一个宏，用来打印错误并退出
+#define exit_if(r, ...) if(r) {printf(__VA_ARGS__); printf("%s:%d error no: %d error msg %s\n", __FILE__, __LINE__, errno, strerror(errno)); exit(1);}
+// 这个函数用于将指定的fd设置为非阻塞状态
+void setNonBlock(int fd) {
+    // 首先我们取出原来文件描述符的flags
+    int flags = fcntl(fd, F_GETFL, 0);
+    exit_if(flags<0, "fcntl failed");
+    // 然后加上O_NONBLOCK，再设置回去
+    int r = fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    exit_if(r<0, "fcntl failed");
+}
+// 对epoll_ctl二次包装，将events 和 fd放入ev中。
+// 并且设置events 设置为可读可写时触发
+void updateEvents(int efd, int fd, int events, int op) {
+    struct epoll_event ev = {0};
+    ev.events = events;f
+    ev.data.fd = fd;
+    printf("%s fd %d events read %d write %d\n",
+           op==EPOLL_CTL_MOD?"mod":"add", fd, ev.events & EPOLLIN, ev.events & EPOLLOUT);
+    int r = epoll_ctl(efd, op, fd, &ev);
+    exit_if(r, "epoll_ctl failed");
+}
+// 尝试在fd上做accept操作。如果成功，将其加入到epoll fd的监听列表中。epoll的events设置为当数据有写入的时候触发。
+void handleAccept(int efd, int fd) {
+    struct sockaddr_in raddr;
+    socklen_t rsz = sizeof(raddr);
+    int cfd = accept(fd,(struct sockaddr *)&raddr,&rsz);
+    exit_if(cfd<0, "accept failed");
+    sockaddr_in peer, local;
+    socklen_t alen = sizeof(peer);
+    int r = getpeername(cfd, (sockaddr*)&peer, &alen);
+    exit_if(r<0, "getpeername failed");
+    printf("accept a connection from %s\n", inet_ntoa(raddr.sin_addr));
+    setNonBlock(cfd);
+    updateEvents(efd, cfd, EPOLLIN, EPOLL_CTL_ADD);
+}
+// 表示一个连接。成员有连接已读取的数据、已写入的数据
+// string用来保存二进制内容没有问题吗，如果遇到\0会如何？
+// 没有问题https://www.zhihu.com/question/33104941
+struct Con {
+    string readed;
+    size_t written;
+    bool writeEnabled;
+    Con(): written(0), writeEnabled(false) {}
+};
+// 用来映射fd与con的数据结构
+map<int, Con> cons;
+
+string httpRes;
+// 发送资源
+void sendRes(int efd, int fd) {
+    // 首先取得连接信息
+    Con& con = cons[fd];
+    // 没有接受到数据就要求写入
+    // 说明其可能上一次继续发送的数据发送完了
+    // 其对应的文件描述符在cons中已经删除
+    // 然后触发了epoll信号
+    // 此时关闭其上一次发送的标志
+    // 然后关闭其缓冲区发送触发epoll的标志
+    // 只保留其有数据可读时触发
+    // 为什么不在写入完数据时就将这步做了呢？
+    // if (!con.readed.length()) {
+    //     if (con.writeEnabled) {
+    //         updateEvents(efd, fd, EPOLLIN, EPOLL_CTL_MOD);
+    //         con.writeEnabled = false;
+    //     }
+    //     return;
+    // }
+    // 计算还需要写入的数据长度
+    size_t left = httpRes.length() - con.written;
+    int wd = 0;
+    // 连续写入数据，直到内核缓冲区无法写入数据为止
+    while((wd=::write(fd, httpRes.data()+con.written, left))>0) {
+        con.written += wd;
+        left -= wd;
+        if(output_log) printf("write %d bytes left: %lu\n", wd, left);
+    };
+    // 如果没有数据可以写入，则删除这个连接。但是不断开连接，即将连接信息置空
+    if (left == 0) {
+//        close(fd); // 测试中使用了keepalive，因此不关闭连接。连接会在read事件中关闭
+        if (con.writeEnabled) {
+            updateEvents(efd, fd, EPOLLIN, EPOLL_CTL_MOD);
+            con.writeEnabled = false;
+        }
+        cons.erase(fd);
+        return;
+    }
+    // 如果内核缓冲区满了，没办法写入了
+    if (wd < 0 &&  (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        // 将其标记上可继续写
+        if (!con.writeEnabled) {
+            // 等待其可继续写，或可读
+            // 避免重复进行系统调用，使用con.writeEnabled标记位
+            printf("update it to EPOLLIN|EPOLLOUT\n");
+            updateEvents(efd, fd, EPOLLIN|EPOLLOUT, EPOLL_CTL_MOD);
+            con.writeEnabled = true;
+        }
+        return;
+    }
+    // 如果是其他情况，比如在没有写完数据时直接返回0，或者是返回了其他错误
+    // 则说明出错了
+    if (wd<=0) {
+        printf("write error for %d: %d %s\n", fd, errno, strerror(errno));
+        close(fd);
+        cons.erase(fd);
+    }
+}
+// 当loop once处理读取数据时，调用该函数
+void handleRead(int efd, int fd) {
+    char buf[4096];
+    int n = 0;
+    // 每次读取4k字节，循环读出当前内核中已存在的数据（有可能分包导致信息不完整）
+    while ((n=::read(fd, buf, sizeof buf)) > 0) {
+        if(output_log) printf("read %d bytes\n", n);
+        // 这里通过一个map来获取之前fd对应的连接信息。
+        // 当fd对应的下标不存在的时候，则会调用con的默认构造函数Con(): written(0), writeEnabled(false) {}
+        string& readed = cons[fd].readed;
+        // 调用string类的append方法将数据加入到连接信息中
+        // 注意为了保证二进制安全需要传入参数n
+        readed.append(buf, n);
+        std::cout  << "now info is" << std::endl << "---" <<  readed << endl << "---" <<  std::endl;
+        // 判断一个http请求发送完毕。
+        // 不判断http请求的内容，一律发送静态资源
+        if (readed.length()>4) {
+            if (readed.substr(readed.length()-2, 2) == "\n\n" || readed.substr(readed.length()-4, 4) == "\r\n\r\n") {
+                //当读取到一个完整的http请求，测试发送响应
+                // TCP连接建立起来之后，客户端就开始传输首部，然后以\r\n\r\n来标志首部的结束和实体的开始（当然是请求里包含实体才会有实体的开始），
+                // 接下来就是实体的传输，当实体传输完之后，客户端就开始接收数据，服务器就知道，这次请求就已经结束了，
+                // 那么实体就是\r\n\r\n到停止接收的那么一段数据。对应的，客户端接收响应的时候也是这样。
+                // 没有实体，则\r\n\r\n就是http的结束
+                // 开始写入数据。注意有可能使缓冲区写满，若写满了则在之后继续写入
+                sendRes(efd, fd);
+            }
+        }
+    }
+    // read无法读取的话，就会返回-1。此时errno（errno是属于线程的，是线程安全的）是EAGAIN代表没读完。EWOULDBLOCK和EAGAIN是一样的。
+    // 那就返回，然后等待下次再读取
+    if (n<0 && (errno == EAGAIN || errno == EWOULDBLOCK)){
+        printf("nothing to read from %d, return. \n", fd);
+        return;
+    }
+    //实际应用中，n<0应当检查各类错误，如EINTR
+    if (n < 0) {
+        printf("read %d error: %d %s\n", fd, errno, strerror(errno));
+    }
+    // 执行到这里，n是0，表示对端关闭连接。这时我们也关闭连接
+    printf("%d close the connection\n", fd);
+    close(fd);
+    cons.erase(fd);
+}
+// 当loop once缓冲区可写的时候，简单的写入我们准备好的静态资源
+void handleWrite(int efd, int fd) {
+    sendRes(efd, fd);
+}
+// 对一个epoll句柄进行循环中的一次操作
+// 其中l是LISTEN的fd
+void loop_once(int efd, int lfd, int waitms) {
+    // 最多让内核拷贝20个事件出来
+    const int kMaxEvents = 20;
+    struct epoll_event activeEvs[100];
+    int n = epoll_wait(efd, activeEvs, kMaxEvents, waitms);
+    // n是返回了多少个事件
+    if(output_log) printf("epoll_wait return %d\n", n);
+    for (int i = 0; i < n; i ++) {
+        int fd = activeEvs[i].data.fd;
+        int events = activeEvs[i].events;
+        // EPOLLIN 事件或者是 EPOLLERR事件。EPOLLERR也代表管道写入结束。
+        // 参见： http://man7.org/linux/man-pages/man2/epoll_ctl.2.html
+        if (events & (EPOLLIN | EPOLLERR)) {
+            // EPOLLIN事件则只有当对端有数据写入时才会触发，所以触发一次后需要不断读取所有数据直到读完EAGAIN为止。否则剩下的数据只有在下次对端有写入时才能一起取出来了。
+            // 当对方关闭连接，则是EPOLLERR事件
+            if (fd == lfd) {
+                printf("this is accept\n");
+                handleAccept(efd, fd); 
+            } else {
+                printf("this can read\n");
+                handleRead(efd, fd);
+            }
+        } else if (events & EPOLLOUT) {
+            // 这里处理文件描述符如果可以写入的事件
+            // EPOLLOUT事件只有在连接时触发一次，表示可写
+            // 之后表示缓冲区的数据已经送出，可以继续写入
+            // 详见https://www.zhihu.com/question/22840801
+            if(output_log) printf("handling epollout\n");
+            handleWrite(efd, fd);
+        } else {
+            exit_if(1, "unknown event");
+        }
+    }
+}
+
+int main(int argc, const char* argv[]) {
+    if (argc > 1) { output_log = false; }
+    /* 
+小知识
+signal（参数1，参数2）；
+参数1：我们要进行处理的信号。系统的信号我们可以再终端键入 kill -l查看(共64个)。其实这些信号时系统定义的宏。
+参数2：我们处理的方式（是系统默认还是忽略还是捕获）。SIG_IGN: 如果func参数被设置为SIG_IGN，该信号将被忽略。
+     */
+    ::signal(SIGPIPE, SIG_IGN);
+    // 设置http返回的内容
+    httpRes = "HTTP/1.1 200 OK\r\nConnection: Keep-Alive\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: 19048576\r\n\r\n123456";
+    // 将剩下的内容填充成0。最后content的长度是大约1024*1024
+    for(int i=0;i<19048570;i++) {
+        httpRes+='\0';
+    }
+    // 设置端口为80端口
+    short port = 80;
+    // 创建一个epoll句柄
+    int epollfd = epoll_create(1);
+    exit_if(epollfd < 0, "epoll_create failed");
+    // 创建一个socket套接字
+    int listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    exit_if(listenfd < 0, "socket failed");
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof addr);
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = INADDR_ANY;
+    // 先绑定socket到端口上
+    int r = ::bind(listenfd,(struct sockaddr *)&addr, sizeof(struct sockaddr));
+    // 这一步如果没有超级用户的权限，就会报错。linux对于非root权限用户不能使用1024以下的端口
+    exit_if(r, "bind to 0.0.0.0:%d failed %d %s", port, errno, strerror(errno));
+    r = listen(listenfd, 20);
+    exit_if(r, "listen failed %d %s", errno, strerror(errno));
+    printf("fd %d listening at %d\n", listenfd, port);
+    // 接下来设置文件描述符为阻塞。
+    // 为什么要设置为非阻塞？https://www.zhihu.com/question/23614342
+    setNonBlock(listenfd);
+    // 将其设置为可读取时触发，添加到epoll文件描述符池中
+    updateEvents(epollfd, listenfd, EPOLLIN, EPOLL_CTL_ADD);
+    for (;;) { //实际应用应当注册信号处理函数，退出时清理资源
+        loop_once(epollfd, listenfd, 10000);
+    }
+    return 0;
+}
+
+
+```
+
+
+
+## refer
+
+- 盛延敏 网络编程实战
+
+- https://www.toutiao.com/i6683264188661367309/
+
+- Linux 文件描述符
+
+  趣谈Linux 文件
+
+- Ext4 系统
+
+  https://www.cnblogs.com/alantu2018/p/8461272.html
+
+- 文件系统与页缓存
+
+  https://blog.csdn.net/gdj0001/article/details/80136364
+
+- https://www.jianshu.com/p/1c23ad183def
+
+
+
