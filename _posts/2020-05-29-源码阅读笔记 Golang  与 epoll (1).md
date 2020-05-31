@@ -1,9 +1,19 @@
-# 源码阅读笔记 Golang  与 epoll (1)
+# 源码阅读笔记 Golang  与 epoll 
 
 ```
 golang标准网络库通信模型 epoll + 协程
 文件描述符是非阻塞的 其实阻塞在调用者的G上
 ```
+
+疑问
+
+```
+系统调用accpet 返回的文件描述符 如何和epoll相互联系
+为什么一个新的连接 就有一个accept 返回 而老的连接并不建立accept
+应该是内核通过判断tcp的包 可以判断出来连接队列里面是否有这个client端口的连接 如果有 就不需要建立新的连接 而是去直接发送给epoll中断 epoll中断就会恢复阻塞的conn连接协程
+```
+
+
 
 ## Listen
 
@@ -149,7 +159,9 @@ rg,wg默认是0，rg为pdReady表示读就绪，可以将协程恢复，为pdWai
 
 我们在在用户态协程调用read阻塞时rg就被设置为该读协程，当内核态epoll_wait检测read就绪后就会通过rg找到这个协程让后恢复运行
 
-1. serverInit.Do(runtime_pollServerInit) 对应了epoll的create和epollctl  把netpollBreakRd中断添加到epoll句柄中
+1.serverInit.Do(runtime_pollServerInit) 对应了epoll的create和epollctl  把netpollBreakRd中断添加到epoll句柄中
+
+epoll描述符会在整个程序的生命周期中使用
 
 ```
 根据系统的不同 调用systemcall netpollinit
@@ -181,9 +193,30 @@ netpollinit{
     	netpollBreakRd = uintptr(r)
     	netpollBreakWr = uintptr(w)
 }
+
 ```
 
-2. runtime_pollOpen(uintptr(fd.Sysfd))
+2. nonblockingPipe() 创建一个用于通信的管道 管道为我们提供了中断多路复用等待文件描述符中事件的方法
+
+```
+func netpollBreak() {
+	for {
+		var b byte
+		n := write(netpollBreakWr, unsafe.Pointer(&b), 1)
+		if n == 1 {
+			break
+		}
+		if n == -_EINTR {
+			continue
+		}
+		if n == -_EAGAIN {
+			return
+		}
+	}
+}
+```
+
+3.runtime_pollOpen(uintptr(fd.Sysfd))
 
 ```
  func poll_runtime_pollOpen(fd uintptr) (*pollDesc, int) {
@@ -255,6 +288,17 @@ netpollinit{
 		p = persistentalloc1(size, align, sysStat)
 	})
 	return unsafe.Pointer(p)
+}
+```
+
+每次调用该结构体都会返回链表头还没有被使用的  pollDesc 这种批量初始化的做法能够增加网络轮询器的吞吐量。Go 语言运行时会调用 free 方法释放已经用完的pollDesc 结构，它会直接将结构体插入链表的最前面
+
+```
+func (c *pollCache) free(pd *pollDesc) {
+	lock(&c.lock)
+	pd.link = c.first
+	c.first = pd
+	unlock(&c.lock)
 }
 ```
 
@@ -439,12 +483,18 @@ CPU去更新一个值，但如果想改的值不再是原来的值，操作就�
 
 netpoll函数 感觉是原理是内核中的文件描述符epoll有事件到来 会调用这个函数 会调用epoll_wait函数 然后读取其返回的用户数据（就是netpollopen塞进去的pollDesc指针）
 
+该方法有单独一个常驻的goroutine在高效快速的轮询检测执行，当有网络包收到后，每次都会取最多128个事件，然后在ev.data里就是当初注册事件时的pollDesc，也就找到了要唤醒的G，唤醒之
+
+sysmon方法就是我们说的监控任务，它没有和任何的P(逻辑处理器)进行绑定，而是通过自身改变睡眠时间和时间间隔来一直循环下去(代码位于runtime/proc.go)。 golang中所有文件描述符都被设置成非阻塞的，某个goroutine进行网络io操作，读或者写文件描述符，如果此刻网络io还没准备好，则这个goroutine会被放到系统的等待队列中，这个goroutine失去了运行权，但并不是真正的整个系统“阻塞”于系统调用，后台还有一个poller会不停地进行poll，所有的文件描述符都被添加到了这个poller中的，当某个时刻一个文件描述符准备好了，poller就会唤醒之前因它而阻塞的goroutine，于是goroutine重新运行起来
+
+
+
 ```
 // netpoll checks for ready network connections.
 // Returns list of goroutines that become runnable.
-// delay < 0: blocks indefinitely
-// delay == 0: does not block, just polls
-// delay > 0: block for up to that many nanoseconds
+// delay < 0: blocks indefinitely 无限期等待
+// delay == 0: does not block, just polls 非阻塞轮询
+// delay > 0: block for up to that many nanoseconds 阻塞特定时间轮询网络
 func netpoll(delay int64) gList {
 	if epfd == -1 {
 		return gList{}
@@ -521,7 +571,11 @@ retry:
 
 ```
 
+处理的事件总共包含两种，一种是调用netpollbreak 函数触发的事件，该函数的作用是中断网络轮询器；另一种是其他文件描述符的正常读写事件，对于这些事件，我们会交给netpollread处理
+
 拿到pollDesc指针后 调用netpollready将曾经挂起的协程放入gList中，然后返回该列表
+
+
 
 netpollunblock函数修改pd所在协程的状态为0，表示可运行状态
 
@@ -649,6 +703,16 @@ func (fd *FD) Read(p []byte) (int, error) {
    }
 }
 ```
+
+## 超时管理
+
+方法里被set的超时时间实质通过`addtimer`方法被添加到了runtime下的全局timer管理器里，这个timer管理器是用户态的，由被拆分出来的多个堆结构管理，当超时后会通过`netpollReadDeadline`、`netpollDeadline`、`netpollWriteDeadline`几个方法将休眠的goroutine唤醒。
+
+因此可以简单理解Go的TCP超时机制就是通过单独实现了一个用户态的全局的timer管理器来主动唤醒的
+
+
+
+
 
 ## 网络轮询器 （epoll机制）
 
@@ -781,10 +845,21 @@ typedef union epoll_data {
  };
 ```
 
+- accept 惊群
+
+```
+  惊群效应也有人叫做雷鸣群体效应，不过叫什么，简言之，惊群现象就是多进程（多线程）在同时阻塞等待同一个事件的时候（休眠状态），如果等待的这个事件发生，那么他就会唤醒等待的所有进程（或者线程），但是最终却只可能有一个进程（线程）获得这个时间的“控制权”，对该事件进行处理，而其他进程（线程）获取“控制权”失败，只能重新进入休眠状态，这种现象和性能浪费就叫做惊群
+上下文切换（context  switch）过高会导致cpu像个搬运工，频繁地在寄存器和运行队列之间奔波，更多的时间花在了进程（线程）切换，而不是在真正工作的进程（线程）上面。直接的消耗包括cpu寄存器要保存和加载（例如程序计数器）、系统调度器的代码需要执行。间接的消耗在于多核cache之间的共享数据
+
+```
+
+
+
 ## Refer
 
 ```
 https://www.cnblogs.com/findumars/p/5624958.html
 https://draveness.me/golang/docs/part3-runtime/ch06-concurrency/golang-netpoller/
+https://www.jianshu.com/p/3ff0751dfa04
 ```
 
